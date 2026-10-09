@@ -1,5 +1,24 @@
 # Omada → Wazuh: що змінилося
 
+## v5 — SOC з обмеженим доступом, ручне оновлення, опційне автооновлення
+
+**Логіка правил, ID, level і regex не змінювались.**
+
+**Виправлено:**
+- `private-ips`: склеєний рядок `172.31.:192.168.:` розділено на два; раніше `192.168.x.x` не вважалась внутрішньою
+- старий `update_ti_lists.sh` не знаходив жодного IP Feodo: файл Feodo має переноси CRLF, а пошук ішов по `^IP$`. Правило 100512 фактично не працювало
+
+**Списки:**
+- `known-aps` — заглушка замість прикладу; 100505 і далі вимкнене, тепер вмикається видаленням двох рядків з маркером `ENABLE-100505`
+- `ti-feodo-c2`, `ti-tor-relays`, `ti-mining-pools` — додано заглушки в `lists/`, щоб правила завантажувались з першого дня
+- `mining-pools.txt` перенесено в `docs/` (це не CDB-список і на менеджер не розгортається)
+
+**Threat intel:**
+- `update_ti_lists.sh` видалено; основний спосіб — ручне оновлення (README, розділ 7.1–7.3)
+- опційне автооновлення в `optional/ti-auto-update/`: завантаження від непривілейованого користувача без доступу до Wazuh, встановлення від root без мережі, сувора перевірка формату, резервні копії, `wazuh-analysisd -t` і відкат, рестарт лише при змінах; IP пулів тримаються 30 днів (DNS round-robin); оновлює також `telegram-ips`
+
+**Документація:** README.md / README_UA.md переписано під SOC, який працює в дашборді Wazuh, а решту робить за заявками (шаблони A1–A8); додано розділ про ручне обслуговування всього набору
+
 ## v4 — TI, інвентаризація, аномалії
 
 **Threat intel (100512–100514)** — перевірка IP призначення до правил по портах:
@@ -43,17 +62,6 @@
 - правила: C2, Tor, майнінг, remote access, ризиковані протоколи, DNS bypass, VPN, torrent, lateral movement
 - кореляція: portscan, sweep, P2P, спамбот
 
-## Встановлення
-1. `omada_decoders.xml` → `/var/ossec/etc/decoders/`
-2. `omada_rules.xml` → `/var/ossec/etc/rules/`
-3. `private-ips`, `telegram-ips`, `known-macs`, `known-aps`, `mining-pools.txt` → `/var/ossec/etc/lists/`
-4. `update_ti_lists.sh` → `/usr/local/bin/`, запустити один раз вручну, потім у cron (рядок у шапці скрипта)
-5. В `ossec.conf` всередині `<ruleset>` додати всі `<list>` (перелік у кінці rules-файлу)
-6. `chown wazuh:wazuh /var/ossec/etc/lists/*` і `systemctl restart wazuh-manager`
-7. Перевірити через `/var/ossec/bin/wazuh-logtest`
-
-## Що перевірити в wazuh-logtest
-- FTS на динамічному полі (100506)
-- `negate` на `dstport` (100620)
-- `<different_*>` / `<same_*>` у кореляції (Wazuh 4.3+)
-- часовий пояс менеджера = Europe/Kiev (для off-hours)
+## Встановлення і перевірка
+Актуальна інструкція — у [README_UA.md](../README_UA.md): розділ 4 (встановлення через дашборд або заявку A3),
+розділ 7 (threat intel), розділи 10 і 12 (що перевірити в Ruleset Test / wazuh-logtest).
