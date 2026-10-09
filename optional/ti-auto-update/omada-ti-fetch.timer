@@ -1,0 +1,14 @@
+# OPTIONAL. Runs the download every night. The restart of wazuh-manager (if a list changed)
+# follows right after it, so keep this in a quiet window.
+[Unit]
+Description=Omada/Wazuh: nightly threat-intel download
+
+[Timer]
+OnCalendar=*-*-* 04:15
+RandomizedDelaySec=10min
+# Persistent=false on purpose: a run missed while the host was off must not happen
+# (and restart wazuh-manager) during working hours after boot.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

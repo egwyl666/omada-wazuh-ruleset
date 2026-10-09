@@ -1,0 +1,40 @@
+# OPTIONAL. Part 1: download threat-intel sources as the unprivileged user omada-ti.
+# No access to Wazuh: the only writable path is /var/lib/omada-ti (StateDirectory).
+[Unit]
+Description=Omada/Wazuh: download threat-intel lists (unprivileged)
+Documentation=https://github.com/egwyl666/omada-wazuh-ruleset
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=omada-ti
+Group=omada-ti
+ExecStart=/usr/local/libexec/omada-ti/omada-ti-fetch.sh
+StateDirectory=omada-ti
+StateDirectoryMode=0755
+UMask=0022
+TimeoutStartSec=15min
+
+# Hardening: no privileges, read-only system, network for download and DNS only
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service

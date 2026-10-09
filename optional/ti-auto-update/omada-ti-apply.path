@@ -1,0 +1,10 @@
+# OPTIONAL. Starts the root part when the download part has prepared new lists.
+[Unit]
+Description=Omada/Wazuh: watch for prepared threat-intel lists
+
+[Path]
+PathExists=/var/lib/omada-ti/ready
+Unit=omada-ti-apply.service
+
+[Install]
+WantedBy=multi-user.target

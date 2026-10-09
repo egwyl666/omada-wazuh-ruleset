@@ -1,4 +1,4 @@
-# Mining pool domains -> resolved to IPs by update_ti_lists.sh
+# Mining pool domains. Reference for the MANUAL update of the CDB list ti-mining-pools (see README, section 7).
 # One domain per line. Add/remove freely.
 # Monero (XMR) – the coin most malware miners use
 pool.supportxmr.com

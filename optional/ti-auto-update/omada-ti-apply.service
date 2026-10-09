@@ -1,0 +1,32 @@
+# OPTIONAL. Part 2: runs as root but WITHOUT network. Validates the prepared lists, installs the
+# changed ones into Wazuh, checks the configuration and restarts wazuh-manager.
+# Writable paths are limited to the Wazuh lists, the state and backup dirs, and what
+# wazuh-analysisd -t may need. Create /var/backups/omada-ti before enabling (see README).
+[Unit]
+Description=Omada/Wazuh: install prepared threat-intel lists and restart wazuh-manager
+Documentation=https://github.com/egwyl666/omada-wazuh-ruleset
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/omada-ti/omada-ti-apply.sh
+UMask=0077
+TimeoutStartSec=10min
+
+NoNewPrivileges=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/ossec/etc/lists /var/lib/omada-ti /var/backups/omada-ti
+# wazuh-analysisd -t may write its own runtime files; "-" = ignore if the path is missing
+ReadWritePaths=-/var/ossec/var -/var/ossec/queue -/var/ossec/logs
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
