@@ -24,10 +24,12 @@
 
   <!-- ============ DEVICE INVENTORY (checked first) ============ -->
 
-  <!-- 100505 ВИМКНЕНО за замовчуванням.
+  <!-- 100505 ВИМКНЕНО за замовчуванням (опційне, без нього все інше працює).
        Щоб увімкнути: заповни etc/lists/known-aps MAC-адресами своїх AP
-       (grep -oE 'AP MAC=[^ ]+' omada.log | sort | uniq -c) і прибери коментар навколо правила.
-       Інакше кожна подія з AP не зі списку = алерт rogue AP.
+       (grep -oE 'AP MAC=[^ ]+' omada.log | sort | uniq -c) і видали два рядки з маркером ENABLE-100505:
+         sed -i '/ENABLE-100505/d' /var/ossec/etc/rules/omada_rules.xml
+       Інакше кожна подія з AP не зі списку = алерт rogue AP. -->
+  <!-- ENABLE-100505: delete this line to enable rule 100505
   <rule id="100505" level="10" ignore="600">
     <if_sid>100500</if_sid>
     <list field="omada.ap_mac" lookup="not_match_key">etc/lists/known-aps</list>
@@ -35,7 +37,7 @@
     <mitre><id>T1557</id></mitre>
     <group>inventory,rogue_ap,</group>
   </rule>
-  -->
+  ENABLE-100505: delete this line to enable rule 100505 -->
 
   <!-- MAC not in etc/lists/known-macs, seen for the FIRST time ever (FTS).
        Fires once per MAC, all next events from it go to port rules as usual. -->

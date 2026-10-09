@@ -13,7 +13,7 @@ Repository layout:
 | `decoders/omada_decoders.xml` | Decoder: splits a log line into fields |
 | `rules/omada_rules.xml` | 86 active rules (+ 1 disabled, 100505), IDs 100500-100850 |
 | `lists/private-ips`, `lists/telegram-ips` | CDB lists: internal prefixes, Telegram subnets |
-| `lists/known-macs`, `lists/known-aps` | CDB lists: your allowed client devices and access points (you fill them in) |
+| `lists/known-macs`, `lists/known-aps` | CDB lists: your allowed client devices and access points (you fill them in; `known-aps` is optional) |
 | `lists/mining-pools.txt` | Input for the script (mining pool domains); **not** a CDB list |
 | `scripts/update_ti_lists.sh` | Builds the threat-intel CDB lists `ti-feodo-c2`, `ti-tor-relays`, `ti-mining-pools` |
 | `docs/CHANGELOG_UA.md` | Change history (Ukrainian) |
@@ -187,7 +187,7 @@ If someone else set it up, find it:
 grep -rl 'AP MAC=' /var/log 2>/dev/null | head
 ```
 
-**MACs of your own APs** (put them into `known-aps`):
+**MACs of your own APs** (optional, only needed for rule 100505; see [section 8](#8-access-points-known-aps-and-rule-100505-optional-off-by-default)):
 
 ```bash
 grep -oE 'AP MAC=[^ ]+' /var/log/omada/omada.log | sort | uniq -c
@@ -206,7 +206,7 @@ grep -oE 'MAC SRC=[^ ]+' /var/log/omada/omada.log | sort | uniq -c
 ```
 
 The MACs in the log are lower case; keep them lower case in the lists (lookup is case-sensitive).
-A CDB file must not be empty. `known-macs` ships with a placeholder `"00:00:00:00:00:00":placeholder-replace-me`.
+A CDB file must not be empty. `known-macs` and `known-aps` ship with a placeholder `"00:00:00:00:00:00":placeholder-replace-me`.
 
 **Where are the files?**
 
@@ -272,21 +272,76 @@ Add or remove mining pool domains in `/var/ossec/etc/lists/mining-pools.txt` (on
 A restart briefly stops event analysis and clears the in-memory counters of the correlation rules (scans, torrent, spambot, rates);
 at night, with the least traffic, this costs the least. Do not run the script with `--restart` during working hours.
 
-## 8. Rule 100505 (rogue AP) is disabled by default
+## 8. Access points (`known-aps`) and rule 100505: optional, off by default
 
-100505 alerts (level 10) when the `omada.ap_mac` of a flow is **not** in `known-aps`. If `known-aps` is empty or incomplete,
-**every flow** from the "unknown" AP produces an alert, which floods the dashboard. That is why the rule is commented out.
+**What `known-aps` is.** A whitelist of **access point** MACs: the value of `AP MAC=` in the log, i.e. the EAP that carried the client's traffic.
+It is **not** a list of controllers. The Omada controller (software controller, OC200/OC300) only manages the APs and forwards their logs;
+its own MAC never appears in `AP MAC=`, so you never put a controller into this list.
 
-To enable it:
+**Who uses it.** Only rule 100505 (rogue AP, level 10): "this flow went through an AP that is not in `known-aps`". No other rule reads the list.
 
-1. Collect your AP MACs (section 6) and put them into `lists/known-aps` (`"mac":name`), then copy to `/var/ossec/etc/lists/`.
-2. In `/var/ossec/etc/rules/omada_rules.xml` find the comment that starts at `<!-- 100505 ...`. The explanatory text and the rule are
-   inside **one** comment. Close the comment right after the explanatory text (put `-->` before `<rule id="100505"`) and delete the
-   original `-->` after `</rule>`. If you only remove the comment markers, the plain text would end up inside `<group>` and
-   the XML would be invalid.
-3. `/var/ossec/bin/wazuh-analysisd -t`, then `systemctl restart wazuh-manager`.
+**Is it working now? No, and nothing depends on it.** 100505 is commented out, so the list is not consulted. The repository ships
+`known-aps` with a placeholder (`"00:00:00:00:00:00":placeholder-replace-me`) only so that the `<list>etc/lists/known-aps</list>` entry in
+`ossec.conf` points to an existing, non-empty file. All other rules (ports, threat intel, new-device inventory 100506/100507,
+correlation, off-hours) work without knowing a single AP. **Install everything as described in section 4 and leave `known-aps` as is.**
 
-If you add a new AP later, add its MAC to `known-aps` first, then restart.
+**Why it is off by default.** If 100505 were on with an empty or incomplete list, **every flow** through an "unknown" AP would match it.
+Because only the first matching sibling rule wins (100505 is checked before the destination split), those flows would also stop
+reaching the port and threat-intel rules. So enable it only when the list is complete, and add new APs to the list **before** they go live.
+
+### Connecting your APs later
+
+1. **Find the AP MACs.** Any of these works; you do not need access to the controller:
+   - from the logs Wazuh already receives (one line per AP, the number is how many flows it carried):
+
+     ```bash
+     grep -oE 'AP MAC=[^ ]+' /var/log/omada/omada.log | sort | uniq -c
+     ```
+
+   - from the Omada controller UI, *Devices* list (MAC column), when you have access to it;
+   - from the label on the AP itself.
+
+   A MAC from the logs that you cannot match to a real AP is exactly what this rule is meant to catch: investigate it before adding it.
+
+2. **Build the list.** Draft it from the logs, then give each AP a meaningful name and delete the placeholder line:
+
+   ```bash
+   grep -oE 'AP MAC=[^ ]+' /var/log/omada/omada.log | cut -d= -f2 | tr 'A-F' 'a-f' | sort -u \
+     | awk '{printf "\"%s\":ap-%02d\n", $1, NR}' > /tmp/known-aps
+   cat /tmp/known-aps
+   ```
+
+   Result (edit names by hand):
+
+   ```
+   "aa:bb:cc:dd:ee:01":office-floor1
+   "aa:bb:cc:dd:ee:02":office-floor2
+   ```
+
+3. **Install the list:**
+
+   ```bash
+   cp /tmp/known-aps /var/ossec/etc/lists/known-aps
+   chown wazuh:wazuh /var/ossec/etc/lists/known-aps
+   ```
+
+4. **Enable the rule.** The rule is wrapped in a comment whose first and last lines carry the marker `ENABLE-100505`. Delete those two lines:
+
+   ```bash
+   cp /var/ossec/etc/rules/omada_rules.xml /root/omada_rules.xml.bak
+   sed -i '/ENABLE-100505/d' /var/ossec/etc/rules/omada_rules.xml
+   ```
+
+5. **Check and restart:** `/var/ossec/bin/wazuh-analysisd -t`, then `systemctl restart wazuh-manager`.
+
+6. **Verify in `wazuh-logtest`:** a line with `AP MAC=` that is in `known-aps` must **not** give 100505; the same line with any other AP MAC
+   must give 100505, level 10.
+
+**Adding an AP later:** add its line to `known-aps`, `chown`, restart (lists are compiled at start), then bring the AP online.
+**Disabling again:** restore the backup (`cp /root/omada_rules.xml.bak /var/ossec/etc/rules/omada_rules.xml`) or copy the file from this repository, then restart.
+
+> Note: the flow logs used here were collected through an Omada controller. Whether APs in standalone mode (no controller) send the
+> same `AP MAC=... MAC SRC=...` records was not verified. If `grep 'AP MAC=' /var/log/omada/omada.log` finds nothing, the decoder will not match.
 
 ## 9. First run: expect a burst of 100506 alerts
 
@@ -401,7 +456,7 @@ Verify these in `wazuh-logtest` (they depend on the Wazuh version) before trusti
 tail -50 /var/ossec/logs/ossec.log
 ```
 
-- `Invalid ... XML` / `Syntax error`: a broken comment or tag, often after enabling rule 100505 (see section 8).
+- `Invalid ... XML` / `Syntax error`: a broken comment or tag, for example only one of the two `ENABLE-100505` lines deleted (see section 8).
 - `Rule ID ... already exists` / `Duplicate`: your other custom rules use the same IDs; renumber.
 - `Could not open CDB ...` / `list not found`: the file name in `<list>` or in the rule differs from the real file, or the file is not readable by `wazuh`.
 - `Invalid element in the configuration`: the `<list>` lines are outside `<ruleset>`.
