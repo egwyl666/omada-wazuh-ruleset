@@ -82,7 +82,7 @@ if wanted ti-mining-pools; then
     done | grep -E "^$IPRE$" | grep -vE "$CF_RE" | sort -u > "$WORK/pools.now"
     if [ -s "$WORK/pools.now" ]; then
       # Pool DNS is round-robin: every run returns a slightly different set of IPs, which would
-      # change the list (and restart Wazuh) every night. Keep every IP seen in the last
+      # change the list every night. Keep every IP seen in the last
       # POOLS_KEEP_DAYS days instead ("ip last-seen-epoch" in $SEEN).
       awk -v now="$(date +%s)" -v keep=$((POOLS_KEEP_DAYS * 86400)) -v seenf="$SEEN" '
         BEGIN { while ((getline l < seenf) > 0) { split(l, a, " "); seen[a[1]] = a[2] } }

@@ -1,9 +1,9 @@
 # OPTIONAL. Part 2: runs as root but WITHOUT network. Validates the prepared lists, installs the
-# changed ones into Wazuh, checks the configuration and restarts wazuh-manager.
+# changed ones into Wazuh and checks the configuration. It never restarts wazuh-manager.
 # Writable paths are limited to the Wazuh lists, the state and backup dirs, and what
 # wazuh-analysisd -t may need. Create /var/backups/omada-ti before enabling (see README).
 [Unit]
-Description=Omada/Wazuh: install prepared threat-intel lists and restart wazuh-manager
+Description=Omada/Wazuh: install prepared threat-intel lists (no restart)
 Documentation=https://github.com/egwyl666/omada-wazuh-ruleset
 
 [Service]

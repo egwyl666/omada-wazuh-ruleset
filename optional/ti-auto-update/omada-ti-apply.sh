@@ -7,8 +7,9 @@
 #      (the files come from an unprivileged user, so nothing is trusted);
 #   2. skips it if it equals the installed list;
 #   3. otherwise backs up the installed list and installs the new one (owner wazuh:wazuh, 660).
-# If anything changed: checks the Wazuh configuration and restarts wazuh-manager.
-# If the check fails: restores the backups and does NOT restart.
+# If anything changed: checks the Wazuh configuration; if the check fails, restores the backups.
+# It NEVER restarts wazuh-manager: Wazuh compiles CDB lists only at start, so the new lists
+# take effect at the next planned restart of the manager (done by an admin).
 #
 # Only these list names are accepted; any other file in pending/ is ignored.
 
@@ -19,7 +20,6 @@ LISTS=${LISTS:-/var/ossec/etc/lists}
 BACKUP_DIR=${BACKUP_DIR:-/var/backups/omada-ti}
 OWNER=${OWNER:-wazuh:wazuh}                 # Wazuh < 4.3: ossec:ossec
 ANALYSISD=${ANALYSISD:-/var/ossec/bin/wazuh-analysisd}
-WAZUH_SERVICE=${WAZUH_SERVICE:-wazuh-manager}
 MAX_BYTES=${MAX_BYTES:-20000000}
 ALLOWED="ti-feodo-c2 ti-tor-relays ti-mining-pools telegram-ips"
 
@@ -72,10 +72,10 @@ for name in $ALLOWED; do
 done
 rm -rf "$STATE_DIR/pending"
 
-[ "${#installed[@]}" -gt 0 ] || { log "no list changed, no restart"; exit 0; }
+[ "${#installed[@]}" -gt 0 ] || { log "no list changed"; exit 0; }
 
 if ! "$ANALYSISD" -t; then
-  log "ERROR configuration check failed, restoring previous lists, NO restart"
+  log "ERROR configuration check failed, previous lists restored"
   for name in "${installed[@]}"; do
     if [ -f "$BACKUP_DIR/$name.$STAMP" ]; then
       cp -p -- "$BACKUP_DIR/$name.$STAMP" "$LISTS/$name"
@@ -86,8 +86,7 @@ if ! "$ANALYSISD" -t; then
   exit 1
 fi
 
-log "restarting $WAZUH_SERVICE (changed: ${installed[*]})"
-systemctl restart "$WAZUH_SERVICE"
+log "installed: ${installed[*]}. NOT restarting: the lists take effect at the next restart of wazuh-manager"
 # keep the last 30 backups per list
 for name in $ALLOWED; do
   ls -1t "$BACKUP_DIR/$name".* 2>/dev/null | tail -n +31 | xargs -r rm -f --

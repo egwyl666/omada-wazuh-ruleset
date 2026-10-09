@@ -334,7 +334,7 @@ It is not required: the ruleset works the same without it. It updates `ti-feodo-
 | `omada-ti-fetch.timer` | systemd | | | Every night at 04:15 (+ up to 10 min random delay) starts the fetch part |
 | `omada-ti-fetch.service` -> `omada-ti-fetch.sh` | dedicated user `omada-ti`, no capabilities, read-only system | yes | only `/var/lib/omada-ti` | Downloads Feodo, Tor, Telegram, resolves pool domains, checks sizes, writes the prepared lists and a flag file `ready` |
 | `omada-ti-apply.path` | systemd | | | Starts the apply part as soon as `ready` appears |
-| `omada-ti-apply.service` -> `omada-ti-apply.sh` | root | **no** (`PrivateNetwork`) | `/var/ossec/etc/lists`, `/var/lib/omada-ti`, `/var/backups/omada-ti` (+ Wazuh runtime dirs for the config check) | Strictly validates every prepared list, installs only the changed ones (with a backup), runs `wazuh-analysisd -t`, restarts `wazuh-manager`. If the check fails: restores the backups, **no restart** |
+| `omada-ti-apply.service` -> `omada-ti-apply.sh` | root | **no** (`PrivateNetwork`) | `/var/ossec/etc/lists`, `/var/lib/omada-ti`, `/var/backups/omada-ti` (+ Wazuh runtime dirs for the config check) | Strictly validates every prepared list, installs only the changed ones (with a backup), runs `wazuh-analysisd -t`; if the check fails, restores the backups. **Never restarts `wazuh-manager`** |
 
 The code that talks to the internet never runs with privileges and cannot touch Wazuh; the root part never talks to the network and
 accepts only files that look exactly like CDB lists of IPs (anything else is rejected and logged).
@@ -343,11 +343,13 @@ accepts only files that look exactly like CDB lists of IPs (anything else is rej
 
 - A broken source (download error, Tor below 1000 entries, no pool resolved) is skipped: the list installed in Wazuh stays as it was,
   and the fetch unit ends as *failed*, so the admin's monitoring can see it.
-- **Restart only if a list changed.** The Tor list changes almost every day, so expect a short restart of `wazuh-manager` most nights
-  between 04:15 and about 04:30. If that is too often, run it weekly (see settings below).
-- Pool DNS is round-robin and returns a different subset of IPs on every query. To avoid a change (and a restart) every night, a pool IP
+- **It never restarts `wazuh-manager`.** Wazuh compiles CDB lists only at start, so the updated files take effect at the
+  **next restart of the manager**, whenever the admin does one (planned maintenance, an update of rules or lists, a reboot).
+  Until then Wazuh keeps using the lists it loaded at its last start. If the manager is almost never restarted, agree on a
+  regular restart window with the admin (for example weekly), otherwise the automatic update brings little.
+- Pool DNS is round-robin and returns a different subset of IPs on every query. To keep the list stable, a pool IP
   stays in the list for 30 days after it was last resolved (`POOLS_KEEP_DAYS`).
-- `Persistent=false`: if the server was off at 04:15, that run is skipped instead of running (and restarting Wazuh) after boot during the day.
+- `Persistent=false`: if the server was off at 04:15, that run is simply skipped.
 - It overwrites `telegram-ips`. If you maintain that list by hand, remove it from `FETCH_LISTS` (see settings).
 
 **Installation (admin, as root, from the repository root):**
@@ -369,9 +371,12 @@ systemctl daemon-reload
 systemd-analyze verify /etc/systemd/system/omada-ti-fetch.service /etc/systemd/system/omada-ti-apply.service
 systemctl enable --now omada-ti-apply.path omada-ti-fetch.timer
 
-# 4. First run now (restarts wazuh-manager once: do it in a quiet window)
+# 4. First run now (installs the lists, does not restart anything)
 systemctl start omada-ti-fetch.service
 journalctl -u omada-ti-fetch -u omada-ti-apply -n 50 --no-pager
+
+# 5. Activate the lists: restart the manager once, in a quiet window
+systemctl restart wazuh-manager
 ```
 
 The scripts must stay owned by root and not writable by `omada-ti`; otherwise the unprivileged user could change what root runs.
@@ -385,7 +390,8 @@ journalctl -u omada-ti-fetch -u omada-ti-apply --since yesterday
 ls -l /var/ossec/etc/lists/ /var/backups/omada-ti/
 ```
 
-Without server access you can still see it: in the dashboard open the CDB list `ti-tor-relays`; it must have thousands of lines and change from day to day.
+Without server access you can still see it: in the dashboard open the CDB list `ti-tor-relays`; it must have thousands of lines and change from day to day
+(the file changes nightly; Wazuh uses the new content after the next restart of the manager).
 
 **Settings** (drop-ins, so the shipped files stay unchanged):
 
@@ -595,7 +601,7 @@ Verify these in *Ruleset Test* (they depend on the Wazuh version) before trustin
 **Automatic update (if installed) does not update the lists.** Ask the admin for
 `journalctl -u omada-ti-fetch -u omada-ti-apply --since "2 days ago"`. `WARN download failed` means the manager cannot reach the source
 (firewall / proxy); `REJECT` means a list had an unexpected format and was not installed; `configuration check failed` means the lists
-were rolled back and Wazuh was not restarted.
+were rolled back. `installed: ...` with no effect in alerts means the manager has not been restarted since.
 
 ## 14. Maintenance: updating everything manually
 
@@ -711,8 +717,9 @@ Copy, fill in the `<...>` parts, attach what is listed.
 
 > Please install the optional automatic threat-intel update for the Omada ruleset on the Wazuh manager `<host>`, following README
 > section 7.4 (files in `optional/ti-auto-update/`). The download runs as an unprivileged user without access to Wazuh; the install step
-> runs as root without network, validates the files and restarts `wazuh-manager` only when a list changed, at about 04:15-04:30.
+> runs as root without network and validates the files; it never restarts `wazuh-manager`, so the lists take effect at the next
+> planned restart of the manager. Please tell us how often the manager is restarted, or agree a regular restart window with us.
 > The manager needs outbound HTTPS to `feodotracker.abuse.ch`, `onionoo.torproject.org`, `core.telegram.org` and DNS resolution of the
 > domains in `docs/mining-pools.txt` (proxy, if required: `<proxy>`).
-> Please do the first run in `<agreed window>`, send us `journalctl -u omada-ti-fetch -u omada-ti-apply -n 50 --no-pager`,
+> Please do the first run and one restart of `wazuh-manager` in `<agreed window>`, send us `journalctl -u omada-ti-fetch -u omada-ti-apply -n 50 --no-pager`,
 > and add `omada-ti-fetch.service` and `omada-ti-apply.service` to the monitoring of failed systemd units.
