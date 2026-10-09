@@ -1,0 +1,23 @@
+# Mining pool domains -> resolved to IPs by update_ti_lists.sh
+# One domain per line. Add/remove freely.
+# Monero (XMR) – the coin most malware miners use
+pool.supportxmr.com
+xmr.2miners.com
+gulf.moneroocean.stream
+pool.hashvault.pro
+xmrpool.eu
+mine.c3pool.com
+monero.herominers.com
+monerohash.com
+xmr-eu1.nanopool.org
+xmr-eu2.nanopool.org
+xmr-us-east1.nanopool.org
+xmr-asia1.nanopool.org
+xmr.f2pool.com
+xmr.kryptex.network
+rx.unmineable.com
+randomxmonero.auto.nicehash.com
+# Other popular coins
+etc.2miners.com
+rvn.2miners.com
+kas.2miners.com

@@ -1,0 +1,32 @@
+<!--
+  TP-Link Omada (EAP / controller) – client traffic logs
+  Path: /var/ossec/etc/decoders/omada_decoders.xml
+  Requires Wazuh 4.3+ (PCRE2)
+
+  Example:
+  [1791521490.308231667] AP MAC=00:11:22:33:44:55 MAC SRC=00:11:22:33:44:66 IP SRC=192.0.2.40 IP DST=149.154.167.41 IP proto=6 SPT=55138 DPT=443
+
+  <fts> = "first time seen" key, used by rule 100506 (new device).
+  It is set on both children because they share a name.
+-->
+
+<!-- Parent: catches any Omada flow record -->
+<decoder name="omada">
+  <prematch type="pcre2">AP MAC=\S+ MAC SRC=\S+ IP SRC=</prematch>
+</decoder>
+
+<!-- Child 1: optional epoch timestamp in [..] (not always present) -->
+<decoder name="omada-flow">
+  <parent>omada</parent>
+  <regex type="pcre2">^\[(\d+\.\d+)\]</regex>
+  <order>omada.epoch</order>
+  <fts>omada.src_mac</fts>
+</decoder>
+
+<!-- Child 2: main fields -->
+<decoder name="omada-flow">
+  <parent>omada</parent>
+  <regex type="pcre2">AP MAC=(\S+) MAC SRC=(\S+) IP SRC=(\S+) IP DST=(\S+) IP proto=(\d+) SPT=(\d+) DPT=(\d+)</regex>
+  <order>omada.ap_mac, omada.src_mac, srcip, dstip, protocol, srcport, dstport</order>
+  <fts>omada.src_mac</fts>
+</decoder>

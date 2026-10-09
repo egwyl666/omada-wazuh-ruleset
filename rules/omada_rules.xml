@@ -1,0 +1,806 @@
+<!--
+  TP-Link Omada – port-based rules
+  Path: /var/ossec/etc/rules/omada_rules.xml
+  Needs: omada_decoders.xml + CDB lists in etc/lists/ (see bottom)
+  IDs: 100500-100899 (change if they clash)
+
+  Structure:
+    100500  base (all Omada flows)
+    ├─ 100505-07  inventory: rogue AP (DISABLED by default), new unknown device, randomized MAC
+    ├─ 100510  dst = EXTERNAL
+    │   ├─ 100512-14  threat intel (Feodo C2, Tor relays, mining pools)
+    │   └─ 10052x-10075x  port rules
+    └─ 100511  dst = INTERNAL  → 10059x lateral, 1008xx LAN apps
+    1006xx  correlation (scans, P2P, spam, high-rate, off-hours)
+-->
+<group name="omada,network,">
+
+  <!-- ============ BASE ============ -->
+  <rule id="100500" level="0">
+    <decoded_as>omada</decoded_as>
+    <description>Omada: flow $(srcip):$(srcport) -> $(dstip):$(dstport) proto $(protocol)</description>
+  </rule>
+
+
+  <!-- ============ DEVICE INVENTORY (checked first) ============ -->
+
+  <!-- 100505 ВИМКНЕНО за замовчуванням.
+       Щоб увімкнути: заповни etc/lists/known-aps MAC-адресами своїх AP
+       (grep -oE 'AP MAC=[^ ]+' omada.log | sort | uniq -c) і прибери коментар навколо правила.
+       Інакше кожна подія з AP не зі списку = алерт rogue AP.
+  <rule id="100505" level="10" ignore="600">
+    <if_sid>100500</if_sid>
+    <list field="omada.ap_mac" lookup="not_match_key">etc/lists/known-aps</list>
+    <description>Omada: traffic via UNKNOWN access point $(omada.ap_mac) – client $(srcip) (MAC $(omada.src_mac))</description>
+    <mitre><id>T1557</id></mitre>
+    <group>inventory,rogue_ap,</group>
+  </rule>
+  -->
+
+  <!-- MAC not in etc/lists/known-macs, seen for the FIRST time ever (FTS).
+       Fires once per MAC, all next events from it go to port rules as usual. -->
+  <rule id="100506" level="7">
+    <if_sid>100500</if_sid>
+    <if_fts />
+    <list field="omada.src_mac" lookup="not_match_key">etc/lists/known-macs</list>
+    <description>Omada: NEW unknown device MAC $(omada.src_mac) ($(srcip)) via AP $(omada.ap_mac)</description>
+    <group>inventory,new_device,</group>
+  </rule>
+
+  <!-- Same, but MAC is randomized (2nd hex char 2/6/a/e = locally administered) -->
+  <rule id="100507" level="7">
+    <if_sid>100506</if_sid>
+    <field name="omada.src_mac" type="pcre2">^.[26aeAE]:</field>
+    <description>Omada: NEW unknown device with RANDOMIZED MAC $(omada.src_mac) ($(srcip)) – hard to attribute</description>
+    <group>inventory,new_device,randomized_mac,</group>
+  </rule>
+
+
+  <!-- ============ DESTINATION SPLIT ============ -->
+
+  <rule id="100510" level="0">
+    <if_sid>100500</if_sid>
+    <list field="dstip" lookup="not_address_match_key">etc/lists/private-ips</list>
+    <description>Omada: flow to external destination</description>
+    <group>omada_external,</group>
+  </rule>
+
+  <rule id="100511" level="0">
+    <if_sid>100500</if_sid>
+    <list field="dstip" lookup="address_match_key">etc/lists/private-ips</list>
+    <description>Omada: flow to internal destination</description>
+    <group>omada_internal,</group>
+  </rule>
+
+
+  <!-- ============ THREAT INTEL (IP lists, checked before port rules) ============
+       Lists are refreshed by update_ti_lists.sh -->
+
+  <rule id="100512" level="12">
+    <if_sid>100510</if_sid>
+    <list field="dstip" lookup="address_match_key">etc/lists/ti-feodo-c2</list>
+    <description>Omada TI: $(srcip) (MAC $(omada.src_mac)) -> KNOWN BOTNET C2 $(dstip):$(dstport) (abuse.ch Feodo Tracker)</description>
+    <mitre><id>T1071</id></mitre>
+    <group>threat_intel,c2,</group>
+  </rule>
+
+  <rule id="100513" level="10">
+    <if_sid>100510</if_sid>
+    <list field="dstip" lookup="address_match_key">etc/lists/ti-tor-relays</list>
+    <description>Omada TI: $(srcip) (MAC $(omada.src_mac)) -> Tor relay $(dstip):$(dstport)</description>
+    <mitre><id>T1090.003</id></mitre>
+    <group>threat_intel,anonymizer,tor,</group>
+  </rule>
+
+  <rule id="100514" level="10">
+    <if_sid>100510</if_sid>
+    <list field="dstip" lookup="address_match_key">etc/lists/ti-mining-pools</list>
+    <description>Omada TI: $(srcip) (MAC $(omada.src_mac)) -> crypto-mining pool $(dstip):$(dstport)</description>
+    <mitre><id>T1496</id></mitre>
+    <group>threat_intel,cryptomining,</group>
+  </rule>
+
+
+  <!-- ============ EXTERNAL: ANONYMIZERS / C2 / MALWARE ============ -->
+
+  <rule id="100520" level="10">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(9001|9030|9050|9051|9150)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: Tor)</description>
+    <mitre><id>T1090.003</id></mitre>
+    <group>suspicious_port,anonymizer,tor,</group>
+  </rule>
+
+  <rule id="100521" level="10">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(4444|4445|1337|31337|50050)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: C2 / reverse shells / Metasploit / Cobalt Strike)</description>
+    <mitre><id>T1571</id></mitre>
+    <group>suspicious_port,c2,</group>
+  </rule>
+
+  <rule id="100522" level="10">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(3333|5555|7777|8333|9999|14433|14444|45560|45700)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: crypto-mining stratum)</description>
+    <mitre><id>T1496</id></mitre>
+    <group>suspicious_port,cryptomining,</group>
+  </rule>
+
+  <rule id="100523" level="8">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(666[0-9]|6697|7000)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: IRC / botnet C2)</description>
+    <mitre><id>T1071</id></mitre>
+    <group>suspicious_port,c2,irc,</group>
+  </rule>
+
+  <rule id="100524" level="6">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(1080|1081|3128)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: SOCKS/HTTP proxy)</description>
+    <mitre><id>T1090</id></mitre>
+    <group>suspicious_port,anonymizer,proxy,</group>
+  </rule>
+
+
+  <!-- ============ EXTERNAL: REMOTE ACCESS ============ -->
+
+  <rule id="100530" level="8">
+    <if_sid>100510</if_sid>
+    <dstport>3389</dstport>
+    <description>Omada: outbound RDP to internet $(srcip) -> $(dstip)</description>
+    <mitre><id>T1021.001</id></mitre>
+    <group>remote_access,</group>
+  </rule>
+
+  <rule id="100531" level="8">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(590[0-3]|5800)$</dstport>
+    <description>Omada: outbound VNC to internet $(srcip) -> $(dstip):$(dstport)</description>
+    <mitre><id>T1021.005</id></mitre>
+    <group>remote_access,</group>
+  </rule>
+
+  <rule id="100532" level="9">
+    <if_sid>100510</if_sid>
+    <dstport>23</dstport>
+    <description>Omada: outbound Telnet (cleartext) $(srcip) -> $(dstip)</description>
+    <group>remote_access,cleartext,</group>
+  </rule>
+
+  <rule id="100533" level="4">
+    <if_sid>100510</if_sid>
+    <dstport>22</dstport>
+    <description>Omada: outbound SSH from wireless client $(srcip) -> $(dstip)</description>
+    <mitre><id>T1021.004</id></mitre>
+    <group>remote_access,</group>
+  </rule>
+
+  <rule id="100534" level="7">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(5938|7070|2111[5-9]|6568|5650|8040|8041)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: TeamViewer/AnyDesk/RustDesk)</description>
+    <mitre><id>T1219</id></mitre>
+    <group>suspicious_port,remote_access,rat_tool,</group>
+  </rule>
+
+
+  <!-- ============ EXTERNAL: CLEARTEXT / RISKY PROTOCOLS ============ -->
+
+  <rule id="100540" level="9">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(445|135|137|138|139)$</dstport>
+    <description>Omada: SMB/NetBIOS/RPC to internet $(srcip) -> $(dstip):$(dstport) (NTLM leak / exfil risk)</description>
+    <mitre><id>T1048</id><id>T1187</id></mitre>
+    <group>smb,exfil,</group>
+  </rule>
+
+  <rule id="100541" level="8">
+    <if_sid>100510</if_sid>
+    <dstport>25</dstport>
+    <description>Omada: direct SMTP (25) from client $(srcip) -> $(dstip) – possible spambot</description>
+    <mitre><id>T1071.003</id></mitre>
+    <group>smtp,spam,</group>
+  </rule>
+
+  <rule id="100542" level="5">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(20|21)$</dstport>
+    <description>Omada: cleartext FTP to internet $(srcip) -> $(dstip)</description>
+    <mitre><id>T1048.003</id></mitre>
+    <group>cleartext,ftp,</group>
+  </rule>
+
+  <rule id="100543" level="8">
+    <if_sid>100510</if_sid>
+    <dstport>69</dstport>
+    <description>Omada: TFTP to internet $(srcip) -> $(dstip)</description>
+    <mitre><id>T1048.003</id></mitre>
+    <group>cleartext,tftp,</group>
+  </rule>
+
+  <rule id="100544" level="7">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(161|162|389|636|3268)$</dstport>
+    <description>Omada: SNMP/LDAP to internet $(srcip) -> $(dstip):$(dstport)</description>
+    <group>cleartext,</group>
+  </rule>
+
+  <rule id="100545" level="6">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(1433|1521|3306|5432|6379|9200|11211|27017)$</dstport>
+    <description>Omada: database port to internet $(srcip) -> $(dstip):$(dstport)</description>
+    <mitre><id>T1048</id></mitre>
+    <group>database,exfil,</group>
+  </rule>
+
+
+  <!-- ============ EXTERNAL: DNS BYPASS ============ -->
+  <!-- If clients must use your internal resolver, any external :53 is a bypass -->
+
+  <rule id="100550" level="4">
+    <if_sid>100510</if_sid>
+    <dstport>53</dstport>
+    <description>Omada: DNS directly to external resolver $(dstip) from $(srcip)</description>
+    <mitre><id>T1071.004</id></mitre>
+    <group>dns,policy_violation,</group>
+  </rule>
+
+  <rule id="100551" level="5">
+    <if_sid>100510</if_sid>
+    <dstport>853</dstport>
+    <description>Omada: DNS-over-TLS to $(dstip) from $(srcip) (bypasses DNS monitoring)</description>
+    <mitre><id>T1572</id></mitre>
+    <group>dns,policy_violation,</group>
+  </rule>
+
+
+  <!-- ============ EXTERNAL: VPN / TUNNELS ============ -->
+
+  <rule id="100560" level="5">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(1194|51820|1723|1701|500|4500)$</dstport>
+    <description>Omada: VPN tunnel (OpenVPN/WireGuard/PPTP/L2TP/IPsec) $(srcip) -> $(dstip):$(dstport)</description>
+    <mitre><id>T1572</id></mitre>
+    <group>vpn,policy_violation,</group>
+  </rule>
+
+
+  <!-- ============ EXTERNAL: P2P / TORRENT ============ -->
+
+  <rule id="100570" level="5">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(688[1-9]|6969|51413)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) (MAC $(omada.src_mac)) -> $(dstip) (often used by: BitTorrent)</description>
+    <group>suspicious_port,p2p,policy_violation,</group>
+  </rule>
+
+  <rule id="100571" level="5">
+    <if_sid>100510</if_sid>
+    <srcport type="pcre2">^(688[1-9]|51413)$</srcport>
+    <description>Omada: suspicious source port $(srcport) – $(srcip) (MAC $(omada.src_mac)) -> $(dstip) (often used by: BitTorrent)</description>
+    <group>suspicious_port,p2p,policy_violation,</group>
+  </rule>
+
+
+  <!-- ============ INTERNAL: LATERAL MOVEMENT FROM WI-FI ============ -->
+
+  <rule id="100590" level="6">
+    <if_sid>100511</if_sid>
+    <dstport>445</dstport>
+    <description>Omada: wireless client $(srcip) -> SMB on $(dstip)</description>
+    <mitre><id>T1021.002</id></mitre>
+    <group>lateral,smb,</group>
+  </rule>
+
+  <rule id="100591" level="6">
+    <if_sid>100511</if_sid>
+    <dstport>3389</dstport>
+    <description>Omada: wireless client $(srcip) -> RDP on $(dstip)</description>
+    <mitre><id>T1021.001</id></mitre>
+    <group>lateral,remote_access,</group>
+  </rule>
+
+  <rule id="100592" level="8">
+    <if_sid>100511</if_sid>
+    <dstport type="pcre2">^(5985|5986)$</dstport>
+    <description>Omada: wireless client $(srcip) -> WinRM on $(dstip):$(dstport)</description>
+    <mitre><id>T1021.006</id></mitre>
+    <group>lateral,</group>
+  </rule>
+
+  <rule id="100593" level="6">
+    <if_sid>100511</if_sid>
+    <dstport>135</dstport>
+    <description>Omada: wireless client $(srcip) -> RPC/DCOM on $(dstip)</description>
+    <mitre><id>T1021.003</id></mitre>
+    <group>lateral,</group>
+  </rule>
+
+  <rule id="100594" level="6">
+    <if_sid>100511</if_sid>
+    <dstport type="pcre2">^(590[0-3])$</dstport>
+    <description>Omada: wireless client $(srcip) -> VNC on $(dstip)</description>
+    <mitre><id>T1021.005</id></mitre>
+    <group>lateral,remote_access,</group>
+  </rule>
+
+  <rule id="100595" level="7">
+    <if_sid>100511</if_sid>
+    <dstport>23</dstport>
+    <description>Omada: wireless client $(srcip) -> Telnet on $(dstip)</description>
+    <group>lateral,cleartext,</group>
+  </rule>
+
+  <rule id="100596" level="7">
+    <if_sid>100511</if_sid>
+    <dstport type="pcre2">^(1433|3306|5432|6379|27017|9200)$</dstport>
+    <description>Omada: wireless client $(srcip) -> database $(dstip):$(dstport)</description>
+    <group>lateral,database,</group>
+  </rule>
+
+
+  <!-- ============ CORRELATION ============ -->
+
+  <!-- Vertical port scan: one client, many ports -->
+  <rule id="100600" level="10" frequency="25" timeframe="60">
+    <if_matched_group>omada</if_matched_group>
+    <same_srcip />
+    <different_dstport />
+    <description>Omada: port scan from $(srcip) (MAC $(omada.src_mac)) – 25+ different ports in 60s</description>
+    <mitre><id>T1046</id></mitre>
+    <group>scan,</group>
+  </rule>
+
+  <!-- Horizontal sweep on lateral ports: one client, many internal hosts -->
+  <rule id="100601" level="12" frequency="10" timeframe="120">
+    <if_matched_group>lateral</if_matched_group>
+    <same_srcip />
+    <same_dstport />
+    <different_dstip />
+    <description>Omada: internal sweep from $(srcip) on port $(dstport) – 10+ hosts in 2 min (worm/lateral movement?)</description>
+    <mitre><id>T1046</id><id>T1210</id></mitre>
+    <group>scan,lateral,</group>
+  </rule>
+
+  <!-- Confirmed torrenting: many peers -->
+  <rule id="100602" level="8" frequency="10" timeframe="120">
+    <if_matched_group>p2p</if_matched_group>
+    <same_field>omada.src_mac</same_field>
+    <different_dstip />
+    <description>Omada: suspected P2P/BitTorrent – $(srcip) (MAC $(omada.src_mac)) hit torrent-like ports on 10+ peers</description>
+    <group>suspicious_port,p2p,policy_violation,</group>
+  </rule>
+
+  <!-- Repeated hits to mining / C2 ports = likely infected host -->
+  <rule id="100603" level="12" frequency="5" timeframe="300">
+    <if_matched_group>c2|cryptomining</if_matched_group>
+    <same_srcip />
+    <description>Omada: repeated traffic to suspicious C2/mining ports from $(srcip) (MAC $(omada.src_mac)) – check host</description>
+    <mitre><id>T1071</id><id>T1496</id></mitre>
+    <group>suspicious_port,c2,</group>
+  </rule>
+
+  <!-- Spambot: many SMTP destinations -->
+  <rule id="100604" level="10" frequency="10" timeframe="300">
+    <if_matched_group>spam</if_matched_group>
+    <same_srcip />
+    <different_dstip />
+    <description>Omada: $(srcip) sent SMTP to 10+ mail servers in 5 min – likely spambot</description>
+    <mitre><id>T1071.003</id></mitre>
+    <group>spam,</group>
+  </rule>
+
+  <!-- High-rate flow: same client -> same dst:port 200+ events in 60s
+       (tunnel / flood / non-web stream). Web/DNS/NTP excluded – too noisy. -->
+  <rule id="100620" level="7" frequency="200" timeframe="60">
+    <if_matched_group>omada</if_matched_group>
+    <same_srcip />
+    <same_dstip />
+    <same_dstport />
+    <dstport negate="yes" type="pcre2">^(80|443|53|123)$</dstport>
+    <description>Omada: high-rate flow $(srcip) -> $(dstip):$(dstport) (200+ events/min) – tunnel/flood/stream?</description>
+    <mitre><id>T1572</id><id>T1498</id></mitre>
+    <group>anomaly,high_rate,</group>
+  </rule>
+
+  <!-- Extreme rate on ANY port, incl. web -->
+  <rule id="100621" level="9" frequency="1000" timeframe="60">
+    <if_matched_group>omada</if_matched_group>
+    <same_srcip />
+    <same_dstip />
+    <same_dstport />
+    <description>Omada: EXTREME flow rate $(srcip) -> $(dstip):$(dstport) (1000+ events/min)</description>
+    <mitre><id>T1498</id></mitre>
+    <group>anomaly,high_rate,</group>
+  </rule>
+
+
+  <!-- ============ OFF-HOURS ============
+       Time = Wazuh manager local time (set TZ to Europe/Kiev).
+       Overrides the normal remote-access / VPN alert with a higher level. -->
+
+  <rule id="100630" level="10">
+    <if_group>remote_access</if_group>
+    <time>20:00 - 07:00</time>
+    <description>Omada OFF-HOURS (night): remote access $(srcip) (MAC $(omada.src_mac)) -> $(dstip):$(dstport)</description>
+    <mitre><id>T1021</id></mitre>
+    <group>off_hours,</group>
+  </rule>
+
+  <rule id="100631" level="9">
+    <if_group>remote_access</if_group>
+    <weekday>weekends</weekday>
+    <description>Omada OFF-HOURS (weekend): remote access $(srcip) (MAC $(omada.src_mac)) -> $(dstip):$(dstport)</description>
+    <mitre><id>T1021</id></mitre>
+    <group>off_hours,</group>
+  </rule>
+
+  <rule id="100632" level="8">
+    <if_group>vpn</if_group>
+    <time>20:00 - 07:00</time>
+    <description>Omada OFF-HOURS (night): VPN tunnel $(srcip) (MAC $(omada.src_mac)) -> $(dstip):$(dstport)</description>
+    <mitre><id>T1572</id></mitre>
+    <group>off_hours,</group>
+  </rule>
+
+  <rule id="100633" level="7">
+    <if_group>vpn</if_group>
+    <weekday>weekends</weekday>
+    <description>Omada OFF-HOURS (weekend): VPN tunnel $(srcip) (MAC $(omada.src_mac)) -> $(dstip):$(dstport)</description>
+    <mitre><id>T1572</id></mitre>
+    <group>off_hours,</group>
+  </rule>
+
+
+  <!-- ##################################################################
+       APPLICATION IDENTIFICATION (known app ports)
+       level 0 = noise, only archived / for correlation
+       level 3 = visible in dashboard (inventory / policy)
+       level 4-7 = worth a look
+       ################################################################## -->
+
+  <!-- ============ EXTERNAL: WEB / BASE ============ -->
+
+  <rule id="100700" level="0">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(80|443|8080|8443)$</dstport>
+    <description>Omada app: Web (HTTP/HTTPS) $(srcip) -> $(dstip):$(dstport)</description>
+    <group>app,app_web,</group>
+  </rule>
+
+  <rule id="100701" level="3">
+    <if_sid>100700</if_sid>
+    <list field="dstip" lookup="address_match_key">etc/lists/telegram-ips</list>
+    <description>Omada app: Telegram $(srcip) (MAC $(omada.src_mac)) -> $(dstip):$(dstport)</description>
+    <group>app,app_messenger,telegram,</group>
+  </rule>
+
+  <rule id="100702" level="0">
+    <if_sid>100700</if_sid>
+    <protocol>17</protocol>
+    <dstport>443</dstport>
+    <description>Omada app: QUIC/HTTP3 $(srcip) -> $(dstip)</description>
+    <group>app,app_web,quic,</group>
+  </rule>
+
+  <rule id="100703" level="0">
+    <if_sid>100510</if_sid>
+    <dstport>123</dstport>
+    <description>Omada app: NTP to external $(dstip) from $(srcip)</description>
+    <group>app,app_infra,</group>
+  </rule>
+
+  <rule id="100704" level="0">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(110|143|465|587|993|995)$</dstport>
+    <description>Omada app: Mail client (IMAP/POP3/SMTP submission) $(srcip) -> $(dstip):$(dstport)</description>
+    <group>app,app_mail,</group>
+  </rule>
+
+
+  <!-- ============ EXTERNAL: MESSENGERS / PUSH ============ -->
+
+  <rule id="100710" level="3">
+    <if_sid>100510</if_sid>
+    <dstport>5222</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: XMPP / WhatsApp / game chat)</description>
+    <group>suspicious_port,app,app_messenger,</group>
+  </rule>
+
+  <rule id="100711" level="3">
+    <if_sid>100710</if_sid>
+    <list field="dstip" lookup="address_match_key">etc/lists/telegram-ips</list>
+    <description>Omada app: Telegram (MTProto 5222) $(srcip) -> $(dstip)</description>
+    <group>app,app_messenger,telegram,</group>
+  </rule>
+
+  <rule id="100712" level="0">
+    <if_sid>100510</if_sid>
+    <dstport>5223</dstport>
+    <description>Omada app: Apple Push (APNs) from $(srcip)</description>
+    <group>app,app_push,apple,</group>
+  </rule>
+
+  <rule id="100713" level="0">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(5228|5229|5230)$</dstport>
+    <description>Omada app: Google Play / FCM push from $(srcip)</description>
+    <group>app,app_push,google,</group>
+  </rule>
+
+  <rule id="100714" level="3">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(4244|5242|7985)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: WhatsApp/Viber)</description>
+    <group>suspicious_port,app,app_messenger,</group>
+  </rule>
+
+  <rule id="100715" level="3">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(5190)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: ICQ/AIM)</description>
+    <group>suspicious_port,app,app_messenger,</group>
+  </rule>
+
+
+  <!-- ============ EXTERNAL: VOICE / VIDEO CALLS ============ -->
+
+  <rule id="100720" level="3">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(347[89]|348[01]|5349|1930[2-9])$</dstport>
+    <description>Omada app: STUN/TURN/WebRTC (Teams/Meet/WhatsApp/Discord calls) $(srcip) -> $(dstip):$(dstport)</description>
+    <group>app,app_voip,</group>
+  </rule>
+
+  <rule id="100721" level="3">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(880[1-9]|8810)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: Zoom)</description>
+    <group>suspicious_port,app,app_voip,zoom,</group>
+  </rule>
+
+  <rule id="100722" level="3">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(9000|5004)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: Webex media)</description>
+    <group>suspicious_port,app,app_voip,webex,</group>
+  </rule>
+
+  <rule id="100723" level="5">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(5060|5061)$</dstport>
+    <description>Omada app: SIP to internet $(srcip) -> $(dstip):$(dstport) (unapproved VoIP / toll fraud?)</description>
+    <group>app,app_voip,sip,</group>
+  </rule>
+
+  <rule id="100724" level="3">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(9987|10011|30033|64738)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: TeamSpeak/Mumble)</description>
+    <group>suspicious_port,app,app_voip,app_gaming,</group>
+  </rule>
+
+
+  <!-- ============ EXTERNAL: GAMING ============ -->
+
+  <rule id="100730" level="3">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(270[02-4][0-9]|2701[0-68-9]|27050|4380)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: Steam)</description>
+    <group>suspicious_port,app,app_gaming,steam,</group>
+  </rule>
+
+  <rule id="100731" level="3">
+    <if_sid>100510</if_sid>
+    <dstport>3074</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: Xbox Live / Call of Duty)</description>
+    <group>suspicious_port,app,app_gaming,</group>
+  </rule>
+
+  <rule id="100732" level="3">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(1119|6113)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: Battle.net)</description>
+    <group>suspicious_port,app,app_gaming,</group>
+  </rule>
+
+  <rule id="100733" level="3">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(2099|839[3-9]|8400)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: Riot Games)</description>
+    <group>suspicious_port,app,app_gaming,</group>
+  </rule>
+
+  <rule id="100734" level="3">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(25565|19132|19133)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: Minecraft)</description>
+    <group>suspicious_port,app,app_gaming,</group>
+  </rule>
+
+  <rule id="100735" level="3">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(579[5-9]|580[1-9]|58[1-3][0-9]|584[0-7])$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: Epic Games / Fortnite)</description>
+    <group>suspicious_port,app,app_gaming,</group>
+  </rule>
+
+
+  <!-- ============ EXTERNAL: STREAMING / MEDIA ============ -->
+
+  <rule id="100740" level="3">
+    <if_sid>100510</if_sid>
+    <dstport>4070</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: Spotify)</description>
+    <group>suspicious_port,app,app_streaming,</group>
+  </rule>
+
+  <rule id="100741" level="4">
+    <if_sid>100510</if_sid>
+    <dstport>1935</dstport>
+    <description>Omada app: RTMP stream upload (Twitch/YouTube/OBS) from $(srcip) -> $(dstip)</description>
+    <group>app,app_streaming,</group>
+  </rule>
+
+  <rule id="100742" level="5">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(554|8554)$</dstport>
+    <description>Omada app: RTSP (IP cameras/media) to internet $(srcip) -> $(dstip):$(dstport)</description>
+    <group>app,app_streaming,iot,</group>
+  </rule>
+
+  <rule id="100743" level="3">
+    <if_sid>100510</if_sid>
+    <dstport>32400</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: Plex)</description>
+    <group>suspicious_port,app,app_streaming,</group>
+  </rule>
+
+
+  <!-- ============ EXTERNAL: SYNC / IOT / DEV / REMOTE ============ -->
+
+  <rule id="100750" level="4">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(22000|21027)$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: Syncthing – possible data sync outside org)</description>
+    <mitre><id>T1567</id></mitre>
+    <group>suspicious_port,app,app_sync,</group>
+  </rule>
+
+  <rule id="100751" level="4">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(1883|8883)$</dstport>
+    <description>Omada app: MQTT (IoT) $(srcip) -> $(dstip):$(dstport)</description>
+    <group>app,iot,</group>
+  </rule>
+
+  <rule id="100752" level="3">
+    <if_sid>100510</if_sid>
+    <dstport>9418</dstport>
+    <description>Omada app: Git protocol $(srcip) -> $(dstip)</description>
+    <group>app,app_dev,</group>
+  </rule>
+
+  <rule id="100753" level="4">
+    <if_sid>100510</if_sid>
+    <dstport>2408</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: Cloudflare WARP)</description>
+    <mitre><id>T1572</id></mitre>
+    <group>suspicious_port,app,vpn,policy_violation,</group>
+  </rule>
+
+  <rule id="100754" level="7">
+    <if_sid>100510</if_sid>
+    <dstport type="pcre2">^(800[0-9]|801[01]|678[34])$</dstport>
+    <description>Omada: suspicious port $(dstport) – $(srcip) -> $(dstip) (often used by: Parsec/Splashtop remote desktop)</description>
+    <mitre><id>T1219</id></mitre>
+    <group>suspicious_port,app,remote_access,rat_tool,</group>
+  </rule>
+
+
+  <!-- ============ INTERNAL: NORMAL LAN NOISE ============ -->
+
+  <rule id="100800" level="0">
+    <if_sid>100511</if_sid>
+    <dstport type="pcre2">^(53|67|68|123|88|389|636|3268|3269|464)$</dstport>
+    <description>Omada app: internal infra (DNS/DHCP/NTP/Kerberos/LDAP) $(srcip) -> $(dstip):$(dstport)</description>
+    <group>app,app_infra,</group>
+  </rule>
+
+  <rule id="100801" level="0">
+    <if_sid>100511</if_sid>
+    <dstport type="pcre2">^(5353|5355|1900|3702|137|138)$</dstport>
+    <description>Omada app: LAN discovery (mDNS/LLMNR/SSDP/WSD/NetBIOS) from $(srcip)</description>
+    <group>app,app_discovery,</group>
+  </rule>
+
+  <rule id="100802" level="0">
+    <if_sid>100511</if_sid>
+    <dstport type="pcre2">^(515|631|9100)$</dstport>
+    <description>Omada app: printing (LPD/IPP/RAW) $(srcip) -> $(dstip):$(dstport)</description>
+    <group>app,app_print,</group>
+  </rule>
+
+  <rule id="100803" level="0">
+    <if_sid>100511</if_sid>
+    <dstport type="pcre2">^(7000|7100|8008|8009|57621|17500)$</dstport>
+    <description>Omada: suspicious LAN port $(dstport) – $(srcip) -> $(dstip) (often used by: AirPlay/Chromecast/Spotify Connect/Dropbox)</description>
+    <group>suspicious_port,app,app_streaming,</group>
+  </rule>
+
+  <rule id="100804" level="0">
+    <if_sid>100511</if_sid>
+    <dstport type="pcre2">^(80|443|8080|8443)$</dstport>
+    <description>Omada app: internal web $(srcip) -> $(dstip):$(dstport)</description>
+    <group>app,app_web,</group>
+  </rule>
+
+  <rule id="100805" level="3">
+    <if_sid>100511</if_sid>
+    <dstport>22</dstport>
+    <description>Omada app: internal SSH $(srcip) -> $(dstip)</description>
+    <mitre><id>T1021.004</id></mitre>
+    <group>app,remote_access,</group>
+  </rule>
+
+  <rule id="100806" level="0">
+    <if_sid>100511</if_sid>
+    <dstport type="pcre2">^(22000|21027)$</dstport>
+    <description>Omada app: Syncthing LAN $(srcip) -> $(dstip)</description>
+    <group>app,app_sync,</group>
+  </rule>
+
+
+  <!-- ============ APP CORRELATION ============ -->
+
+  <!-- Gaming during work: same client, sustained gaming traffic -->
+  <rule id="100850" level="5" frequency="30" timeframe="600">
+    <if_matched_group>app_gaming</if_matched_group>
+    <same_field>omada.src_mac</same_field>
+    <description>Omada: sustained traffic to gaming-like ports from $(srcip) (MAC $(omada.src_mac))</description>
+    <group>suspicious_port,app,app_gaming,policy_violation,</group>
+  </rule>
+
+</group>
+
+<!--
+  ===== CDB list: /var/ossec/etc/lists/private-ips =====
+  10.:
+  127.:
+  169.254.:
+  172.16.:
+  172.17.:
+  172.18.:
+  172.19.:
+  172.20.:
+  172.21.:
+  172.22.:
+  172.23.:
+  172.24.:
+  172.25.:
+  172.26.:
+  172.27.:
+  172.28.:
+  172.29.:
+  172.30.:
+  172.31.:
+  192.168.:
+  224.:
+  255.255.255.255:
+
+  ===== ossec.conf, inside <ruleset> =====
+  <list>etc/lists/private-ips</list>
+  <list>etc/lists/telegram-ips</list>
+  <list>etc/lists/known-macs</list>
+  <list>etc/lists/known-aps</list>
+  <list>etc/lists/ti-feodo-c2</list>
+  <list>etc/lists/ti-tor-relays</list>
+  <list>etc/lists/ti-mining-pools</list>
+
+  chown wazuh:wazuh /var/ossec/etc/lists/*
+  ti-* lists are generated by update_ti_lists.sh (cron)
+
+  telegram-ips = /24 prefixes from https://core.telegram.org/resources/cidr.txt
+-->
